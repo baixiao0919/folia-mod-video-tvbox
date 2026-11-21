@@ -2,7 +2,7 @@
   "folium": 1,
   "id": "video-tvbox",
   "name": "影视 TVBox",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "author": "百晓",
   "description": "把 TVBox 配置里的影视站做成首页整页：浏览、筛选、搜索、详情、播放。type 3/4 的 spider 站点由本地解析引擎（可选下载）执行。Install once, works on any stock Folia.",
   "main": "index.cjs",
@@ -11,6 +11,7 @@
   "permissions": ["filesystem.data", "net.fetch"],
   "folia": ">=0.7.22 <0.8.0"
 }
+
 
 
 
