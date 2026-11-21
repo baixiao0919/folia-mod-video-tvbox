@@ -68,8 +68,19 @@ const installShim = (folium: Folium) => {
     };
 };
 
-/** 默认站点配置地址，与融合版一致（src/stores/useVideoSettingsStore.ts 的 DEFAULT_VIDEO_SOURCE）。 */
-const DEFAULT_VIDEO_SOURCE = 'http://www.饭太硬.cc/tv';
+/**
+ * 模组本身不预置任何站点地址。
+ * 宿主自带的影视设置里有一个默认示例地址（宿主自己的产品行为，不属于本模组）；
+ * 这里在任何界面渲染之前把它清掉，保证模组只会访问使用者自己保存过的地址。
+ */
+const dropHostDefaultSource = () => {
+    try {
+        if (window.localStorage.getItem('video_source_url')) return;
+        useVideoSettingsStore.setState({ videoSourceUrl: '', videoResolvedUrl: '' });
+    } catch {
+        /* 读不到 localStorage 就维持原状态，页面会要求使用者自己填 */
+    }
+};
 
 /**
  * 融合版一打开就有站点，是因为配置存在宿主自己的 store 里；模组是独立数据目录，
@@ -93,19 +104,31 @@ const ensureVideoConfig = async (folium: Folium, url: string) => {
     return response;
 };
 
-/** 站点配置条：地址 + 应用。没配置时自动填默认值并导入。 */
+/** 站点配置条：地址 + 应用。没有内置地址，只会载入模组数据目录里使用者自己保存过的那一个。 */
 const SourceBar: React.FC<{ folium: Folium; onReady: () => void; compact: boolean }> = ({ folium, onReady, compact }) => {
-    const [draft, setDraft] = React.useState(DEFAULT_VIDEO_SOURCE);
+    const [draft, setDraft] = React.useState('');
     const [busy, setBusy] = React.useState(false);
     const [message, setMessage] = React.useState('');
     const [panelOpen, setPanelOpen] = React.useState(false);
 
     React.useEffect(() => {
+        let cancelled = false;
         void (async () => {
             setBusy(true);
-            setMessage('正在载入默认站点源…');
             try {
-                const result = await ensureVideoConfig(folium, DEFAULT_VIDEO_SOURCE);
+                // 只读模组自己数据目录里的地址；从来没有过就要求使用者自己填
+                const status = await folium.rpc.call('video.request', 'status', {});
+                const address = String(status?.data?.sourceUrl ?? '').trim();
+                if (cancelled) return;
+                if (!address) {
+                    setMessage('还没有站点源：点这里填一个你自己的配置接口地址。');
+                    return;
+                }
+                setDraft(address);
+                // 宿主的影视页要求 store 里有一个非空地址才会去加载，这里同步成模组里存的那份
+                try { useVideoSettingsStore.getState().setVideoSourceUrl(address); } catch { /* 忽略 */ }
+                const result = await ensureVideoConfig(folium, address);
+                if (cancelled) return;
                 if (result?.ok) {
                     setMessage('');
                     onReady();
@@ -113,18 +136,25 @@ const SourceBar: React.FC<{ folium: Folium; onReady: () => void; compact: boolea
                     setMessage(`载入失败：${result?.error?.message ?? '未知错误'}`);
                 }
             } finally {
-                setBusy(false);
+                if (!cancelled) setBusy(false);
             }
         })();
+        return () => { cancelled = true; };
     }, [folium, onReady]);
 
     const apply = async () => {
+        const address = draft.trim();
+        if (!address) {
+            setMessage('先填一个配置接口地址再点应用。');
+            return;
+        }
         setBusy(true);
         setMessage('正在解析站点配置…');
         try {
-            const result = await ensureVideoConfig(folium, draft.trim());
+            const result = await ensureVideoConfig(folium, address);
             if (result?.ok) {
-                // 成功后不再在顶部留一条提示，直接回到右下角胶囊形态，避免重载瞬间闪一条全宽栏
+                // 记到使用者的设置里，下次进来直接沿用；不用模组自己写死任何地址
+                try { useVideoSettingsStore.getState().setVideoSourceUrl(address); } catch { /* 忽略 */ }
                 setMessage('');
                 setPanelOpen(false);
                 onReady();
@@ -280,7 +310,8 @@ const SKIN: Record<string, string> = {
  * 给工作台挑一个能出内容的起始站点。
  * 融合版会记住用户在宿主页面上选过的站点（localStorage 里的 folia.video.preferredSite），
  * 模组页是另一个数据域，读不到；默认落到 sites[0]（「点我切源」这种空壳）就一片空白。
- * 这里在首帧之前把首选站点写好：优先「玩偶」，其次第一个能搜的，最后才退回第一个。
+ * 这里在首帧之前把首选站点写好：优先第一个能搜的站点，其余退回第一个。
+ * 只按配置里站点的自身属性来挑，不针对任何具体站点名做特判。
  */
 const primePreferredSite = async (folium: Folium) => {
     try {
@@ -289,9 +320,7 @@ const primePreferredSite = async (folium: Folium) => {
         if (!sites.length) return;
         const saved = window.localStorage.getItem('folia.video.preferredSite') || '';
         if (saved && sites.some((site) => site.siteKey === saved)) return;
-        const pick = sites.find((site) => /玩偶/.test(site.name))
-            ?? sites.find((site) => site.searchable)
-            ?? sites[0];
+        const pick = sites.find((site) => site.searchable) ?? sites[0];
         if (pick?.siteKey) window.localStorage.setItem('folia.video.preferredSite', pick.siteKey);
     } catch {
         /* 挑不到就交给工作台自己的默认逻辑 */
@@ -326,7 +355,7 @@ const WorkspaceApp: React.FC<{ folium: Folium }> = ({ folium }) => {
             style={{ ...(SKIN as React.CSSProperties), backgroundColor: '#08080b' }}
         >
             <EngineBar folium={folium} />
-            {/* 融合版一打开就有站点；模组的数据目录是独立的，这条负责把默认配置导进来 + 换源 */}
+            {/* 站点源：模组不带任何内置地址，只用来填/换使用者自己的配置接口 */}
             <SourceBar folium={folium} onReady={onConfigReady} compact={ready} />
             <div className="min-h-0 flex-1 overflow-hidden" key={reloadKey}>
                 {open && ready
@@ -340,6 +369,8 @@ const WorkspaceApp: React.FC<{ folium: Folium }> = ({ folium }) => {
 
 /** 宿主调用：把影视页挂进模组容器，返回卸载函数。 */
 export async function mount(container: HTMLElement, folium: Folium) {
+    // 先清掉宿主自带的默认示例地址：模组不内置任何站点源
+    dropHostDefaultSource();
     installShim(folium);
 
     // 宿主的底部播放胶囊是一层 z-60 的浮层，而本模组页被包在 z-10 的祖先里，
