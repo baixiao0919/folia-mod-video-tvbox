@@ -12,7 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const createVideoBridge = require('./lib/videoBridge.cjs').createVideoBridge;
+const createVideoBridge = require('./videoBridge.cjs').createVideoBridge;
 
 /* ---------- 用 Node 取二进制（给 video.bytes 用） ---------- */
 
@@ -291,3 +291,5 @@ module.exports = function activate(api) {
 
   api.rpc.handle('video.request', async (operation, params) => bridge.request(operation, params));
 };
+
+
